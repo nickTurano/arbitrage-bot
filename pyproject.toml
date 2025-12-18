@@ -1,0 +1,103 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "polymarket-kalshi-arbitrage-bot"
+version = "1.0.0"
+description = "Professional arbitrage trading bot for Polymarket and Kalshi prediction markets"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Polymarket-Kalshi Arbitrage Bot Contributors", email = "maintainers@example.com"}
+]
+maintainers = [
+    {name = "Polymarket-Kalshi Arbitrage Bot Contributors", email = "maintainers@example.com"}
+]
+keywords = [
+    "arbitrage",
+    "trading",
+    "prediction-markets",
+    "polymarket",
+    "kalshi",
+    "crypto",
+    "trading-bot",
+    "automated-trading",
+    "defi",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+
+dependencies = [
+    "aiohttp>=3.9.0",
+    "httpx>=0.25.0",
+    "requests>=2.31.0",
+    "websockets>=12.0",
+    "fastapi>=0.104.0",
+    "uvicorn>=0.24.0",
+    "flask>=3.0.0",
+    "flask-cors>=4.0.0",
+    "flask-socketio>=5.3.6",
+    "python-socketio>=5.10.0",
+    "eventlet>=0.34.0",
+    "web3>=6.11.0",
+    "eth-account>=0.10.0",
+    "py-clob-client>=0.0.7",
+    "pandas>=2.1.0",
+    "numpy>=1.26.0",
+    "pyyaml>=6.0.1",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.5.0",
+    "schedule>=1.2.0",
+    "fuzzywuzzy>=0.18.0",
+    "python-Levenshtein>=0.23.0",
+    "cryptography>=41.0.0",
+    "PyJWT>=2.8.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.10.0",
+    "mypy>=1.7.0",
+    "flake8>=6.0.0",
+    "pytest-cov>=4.1.0",
+]
+
+[project.scripts]
+arbitrage-bot = "arbitrage_bot.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["arbitrage_bot*"]
+
+[tool.black]
+line-length = 100
+target-version = ['py310']
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+
