@@ -17,7 +17,7 @@ A production-ready, unified Python package for cross-platform arbitrage trading.
 
 ---
 
-## Cᴏɴᴛᴀᴄᴛ ᴍᴇ Oɴ ʜᴇʀᴇ: 👋 ##
+## Contact Me Here: 👋 ##
 
 Telegram: https://t.me/opensea712
 
