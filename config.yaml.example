@@ -86,6 +86,68 @@ mode:
   simulate_fills: true
   fill_probability: 0.8
 
+# ==============================================
+# Sportsbook Arbitrage (FanDuel, DraftKings, etc.)
+# ==============================================
+# Odds data via TheOddsAPI — get a free key at https://the-odds-api.com/
+# Free tier: 500 credits/mo. Recommended: 20K tier ($30/mo) for continuous scanning.
+
+sportsbooks:
+  # TheOddsAPI key (or set ODDS_API_KEY env var)
+  odds_api_key: "YOUR_ODDS_API_KEY"
+
+  # Which sportsbooks to scan for arbitrage
+  target_bookmakers:
+    - fanduel
+    - draftkings
+    - betmgm
+    - caesars
+    - bovada
+
+  # Which sports to scan (TheOddsAPI sport_key format)
+  sports:
+    - americanfootball_nfl
+    - basketball_nba
+    - baseball_mlb
+    - icehockey_nhl
+
+  # Region (determines which bookmakers are available)
+  regions:
+    - us
+
+  # Betting markets to check
+  markets:
+    - h2h          # moneyline / head-to-head
+    - spreads      # point spreads
+    - totals       # over/under
+
+  # Arb detection thresholds
+  min_edge: 0.005            # 0.5% — minimum edge to flag cross-book arb
+  min_edge_value_bet: 0.05   # 5%  — minimum edge to flag a value bet
+
+  # How often to re-scan (seconds). Set higher to conserve API credits.
+  scan_interval_seconds: 30
+
+# ==============================================
+# Budget Management
+# ==============================================
+# Total project budget: $1,000
+#   - $60  for API costs (TheOddsAPI 2 months @ $30/mo)
+#   - $200 initial betting bankroll (conservative start)
+#   - $740 held in reserve (released after strategy is validated)
+#
+# Reserve release policy:
+#   Reserve is unlocked in $100 increments only after 10+ settled bets
+#   with a positive cumulative P&L.
+
+budget:
+  total: 1000.0
+  api_allocation: 60.0
+  initial_bankroll: 200.0
+  reserve: 740.0
+  max_single_bet: 50.0       # Hard cap: never bet > $50 on one leg
+  max_arb_total: 100.0       # Hard cap: never risk > $100 across all legs of one arb
+
 logging:
   level: "INFO"
   log_file: "logs/bot.log"
