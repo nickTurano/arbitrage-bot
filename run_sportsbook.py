@@ -74,15 +74,22 @@ DEFAULT_SPORTS = [
 # Sources: state gaming commission websites + TheOddsAPI bookmaker list.
 # Update these when licensing changes.
 # ---------------------------------------------------------------------------
+# TheOddsAPI only carries these US bookmakers (as of 2026-01):
+#   draftkings, fanduel, betmgm, mybookieag, betrivers,
+#   betonlineag, betus, bovada, lowvig
+#
+# Notable MISSING from TheOddsAPI: caesars, bally, wynnbet, fanatics,
+# resorts world, thescore. State presets only include books that actually
+# exist on the API. Offshore books are excluded from all presets.
 STATE_BOOKMAKERS = {
-    "ny": ["fanduel", "draftkings", "betmgm", "caesars"],
-    "nj": ["fanduel", "draftkings", "betmgm", "caesars", "betrivers", "unibet"],
-    "pa": ["fanduel", "draftkings", "betmgm", "caesars", "betrivers", "unibet", "barstool"],
-    "il": ["fanduel", "draftkings", "betmgm", "caesars", "betrivers", "barstool"],
-    "nv": ["fanduel", "draftkings", "betmgm", "caesars"],
-    "mi": ["fanduel", "draftkings", "betmgm", "caesars", "betrivers", "barstool"],
-    "oh": ["fanduel", "draftkings", "betmgm", "caesars", "betrivers", "barstool"],
-    "co": ["fanduel", "draftkings", "betmgm", "caesars", "betrivers", "barstool"],
+    "ny": ["fanduel", "draftkings", "betmgm"],          # 3 of 9 NY operators on API
+    "nj": ["fanduel", "draftkings", "betmgm", "betrivers"],
+    "pa": ["fanduel", "draftkings", "betmgm", "betrivers"],
+    "il": ["fanduel", "draftkings", "betmgm", "betrivers"],
+    "nv": ["fanduel", "draftkings", "betmgm"],
+    "mi": ["fanduel", "draftkings", "betmgm", "betrivers"],
+    "oh": ["fanduel", "draftkings", "betmgm", "betrivers"],
+    "co": ["fanduel", "draftkings", "betmgm", "betrivers"],
 }
 
 # ---------------------------------------------------------------------------
