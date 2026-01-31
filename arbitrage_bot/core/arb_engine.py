@@ -562,3 +562,204 @@ class ArbEngine:
             if m.key == market_type:
                 return m
         return None
+
+    # -- cross-platform (Kalshi ↔ Sportsbooks) -----------------------------
+
+    def scan_cross_platform(
+        self,
+        kalshi_games: List[Any],  # List[KalshiGame] — loose type to avoid circular import
+        sportsbook_events: List[Event],
+    ) -> List[ArbOpportunity]:
+        """
+        Compare Kalshi game contract prices against sportsbook h2h lines.
+
+        Kalshi contracts are binary: YES pays $1 if the team wins.
+        The yes_mid price (0–1) is the implied probability.
+
+        Sportsbooks express the same probability via American odds on h2h.
+
+        If these diverge across platforms, it's a cross-platform value
+        opportunity. We flag when the gap exceeds min_edge_value_bet.
+
+        Note: true risk-free cross-platform arb is harder to execute than
+        same-platform arb (different settlement timing, margin requirements).
+        We treat these as value bets with a "kalshi_vs_sportsbook" strategy tag.
+
+        Args:
+            kalshi_games:      List of KalshiGame objects from KalshiClient
+            sportsbook_events: List of Event objects from OddsAPIClient
+
+        Returns:
+            List of ArbOpportunity with strategy="cross_platform_value"
+        """
+        opportunities: List[ArbOpportunity] = []
+
+        # Index sportsbook events by team name for fast lookup
+        # Key: team_name → list of (event, h2h_market)
+        sb_by_team: Dict[str, List[Dict[str, Any]]] = {}
+        for event in sportsbook_events:
+            h2h = self._find_market(
+                [m for bm in event.bookmakers for m in bm.markets], "h2h"
+            )
+            if not h2h:
+                # Gather h2h from each bookmaker separately
+                pass
+
+            for bm in event.bookmakers:
+                h2h_mkt = self._find_market(bm.markets, "h2h")
+                if not h2h_mkt:
+                    continue
+                for outcome in h2h_mkt.outcomes:
+                    sb_by_team.setdefault(outcome.name, []).append(
+                        {
+                            "event": event,
+                            "bookmaker": bm.key,
+                            "outcome": outcome.name,
+                            "odds": outcome.price,
+                            "implied_prob": american_to_implied_prob(outcome.price),
+                        }
+                    )
+
+        # For each Kalshi game, try to match against sportsbook events
+        for game in kalshi_games:
+            opps = self._match_kalshi_game(game, sb_by_team)
+            opportunities.extend(opps)
+
+        opportunities.sort(key=lambda o: o.edge, reverse=True)
+        return opportunities
+
+    def _match_kalshi_game(
+        self, game: Any, sb_by_team: Dict[str, List[Dict[str, Any]]]
+    ) -> List[ArbOpportunity]:
+        """
+        Match one Kalshi game against sportsbook data and detect divergences.
+        """
+        opps: List[ArbOpportunity] = []
+
+        # Check each side of the Kalshi game
+        for market, team_full in [
+            (game.home_market, game.home_team_full),
+            (game.away_market, game.away_team_full),
+        ]:
+            if not market or not team_full or market.implied_prob is None:
+                continue
+            if market.volume_24h < 5:
+                # Skip illiquid Kalshi markets
+                continue
+
+            kalshi_prob = market.implied_prob
+
+            # Find sportsbook prices for the same team in the same matchup
+            sb_entries = sb_by_team.get(team_full, [])
+            if not sb_entries:
+                continue
+
+            # Determine the opponent from the Kalshi game
+            opponent_full = (
+                game.away_team_full
+                if team_full == game.home_team_full
+                else game.home_team_full
+            )
+
+            # Both teams must be resolved to verify it's the same game
+            if not opponent_full:
+                logger.debug(f"Skipping {team_full}: opponent not resolved")
+                continue
+
+            # Match sportsbook entries where:
+            #   1. The event contains the opponent as the other team
+            #   2. The game date is within 12 hours (same game, not a future matchup)
+            kalshi_close = market.close_time
+            matched_sb: List[Dict[str, Any]] = []
+            for entry in sb_entries:
+                event = entry["event"]
+                event_teams = {event.home_team, event.away_team}
+
+                # Opponent must be in the sportsbook event
+                if opponent_full not in event_teams:
+                    continue
+
+                # Date proximity check: Kalshi close_time should be within
+                # ~12 hours of the sportsbook commence_time (same game)
+                if kalshi_close and event.commence_time:
+                    from datetime import timedelta
+                    delta = abs((kalshi_close - event.commence_time).total_seconds())
+                    if delta > 43200:  # 12 hours
+                        continue
+
+                matched_sb.append(entry)
+
+            if not matched_sb:
+                continue
+
+            # Get sportsbook consensus implied prob for this team
+            sb_probs = [e["implied_prob"] for e in matched_sb]
+            sb_consensus = sum(sb_probs) / len(sb_probs)
+
+            # Compare Kalshi vs sportsbook consensus
+            # Edge = how much better one platform is vs the other
+            # If Kalshi prob < sb_consensus: Kalshi is offering better odds
+            #   → buy YES on Kalshi (it's underpriced)
+            # If Kalshi prob > sb_consensus: sportsbooks are offering better odds
+            #   → bet against this team on sportsbooks (they're underpriced)
+
+            edge = abs(kalshi_prob - sb_consensus)
+            if edge < self.min_edge_value_bet:
+                continue
+
+            # Determine the recommended action
+            if kalshi_prob < sb_consensus:
+                # Kalshi is cheaper — buy YES on Kalshi
+                action_platform = "kalshi"
+                action_desc = f"BUY YES on Kalshi ({market.ticker})"
+                stake = min(
+                    self.max_single_bet * min(edge / 0.10, 1.0),
+                    self.max_single_bet,
+                )
+                legs = [
+                    ArbLeg(
+                        bookmaker="kalshi",
+                        outcome=f"{team_full} (YES)",
+                        odds=implied_prob_to_american(kalshi_prob),
+                        implied_prob=kalshi_prob,
+                        stake=round(stake, 2),
+                        point=None,
+                    )
+                ]
+            else:
+                # Sportsbooks are cheaper — bet this team on the best sportsbook
+                best_sb = min(matched_sb, key=lambda e: e["implied_prob"])
+                action_platform = best_sb["bookmaker"]
+                action_desc = f"BET {team_full} on {best_sb['bookmaker']}"
+                stake = min(
+                    self.max_single_bet * min(edge / 0.10, 1.0),
+                    self.max_single_bet,
+                )
+                legs = [
+                    ArbLeg(
+                        bookmaker=best_sb["bookmaker"],
+                        outcome=team_full,
+                        odds=best_sb["odds"],
+                        implied_prob=best_sb["implied_prob"],
+                        stake=round(stake, 2),
+                        point=None,
+                    )
+                ]
+
+            event_name = f"{game.away_team_full or game.away_team_short} vs {game.home_team_full or game.home_team_short}"
+            expires_at = market.close_time
+
+            opps.append(
+                ArbOpportunity(
+                    event_id=game.event_ticker,
+                    event_name=event_name,
+                    sport=game.series,
+                    market_type="h2h_cross_platform",
+                    strategy="cross_platform_value",
+                    edge=round(edge, 6),
+                    legs=legs,
+                    expires_at=expires_at,
+                )
+            )
+
+        return opps

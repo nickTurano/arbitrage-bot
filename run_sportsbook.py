@@ -40,6 +40,7 @@ from typing import List, Optional
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from arbitrage_bot.api.odds_api_client import OddsAPIClient, Event
+from arbitrage_bot.api.kalshi_client import KalshiClient
 from arbitrage_bot.core.arb_engine import ArbEngine, ArbOpportunity, american_to_decimal
 from arbitrage_bot.core.budget_tracker import BudgetTracker
 from arbitrage_bot.core.opportunity_tracker import OpportunityTracker
@@ -242,7 +243,7 @@ async def run_scan(
     dry_run: bool = True,
 ) -> tuple:
     """
-    Run a single scan cycle.
+    Run a single scan cycle (sportsbooks + Kalshi cross-platform).
 
     Returns:
         (opportunities, credits_remaining, credits_used, total_events)
@@ -273,8 +274,24 @@ async def run_scan(
         if live_count:
             logger.info(f"  {live_count} game(s) currently in progress (included in scan)")
 
-        # Run arb detection
+        # Run sportsbook-only arb detection
         opportunities = engine.scan_events(all_events)
+
+        # --- Kalshi cross-platform scan ------------------------------------
+        try:
+            logger.info("Scanning Kalshi...")
+            async with KalshiClient() as kalshi:
+                kalshi_games = await kalshi.get_sports_games()
+                logger.info(f"  → {len(kalshi_games)} Kalshi games fetched")
+
+                if kalshi_games:
+                    cross_opps = engine.scan_cross_platform(kalshi_games, all_events)
+                    logger.info(f"  → {len(cross_opps)} cross-platform opportunities")
+                    opportunities.extend(cross_opps)
+                    # Re-sort by edge
+                    opportunities.sort(key=lambda o: o.edge, reverse=True)
+        except Exception as e:
+            logger.error(f"  ✗ Kalshi scan error: {e}")
 
         return (
             opportunities,
