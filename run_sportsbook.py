@@ -42,6 +42,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from arbitrage_bot.api.odds_api_client import OddsAPIClient, Event
 from arbitrage_bot.core.arb_engine import ArbEngine, ArbOpportunity, american_to_decimal
 from arbitrage_bot.core.budget_tracker import BudgetTracker
+from arbitrage_bot.core.opportunity_tracker import OpportunityTracker
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -113,6 +114,35 @@ def print_opportunity(opp: ArbOpportunity, index: int) -> None:
 
     if opp.expires_at:
         print(f"    Expires: {opp.expires_at.strftime('%Y-%m-%d %H:%M UTC')}")
+
+
+def _print_tracked_opportunity(rec: dict, index: int) -> None:
+    """Print a tracked opportunity record (serialized dict from OpportunityTracker)."""
+    strategy_label = (
+        "CROSS-BOOK ARB" if rec["strategy"] == "cross_book_arb" else "VALUE BET"
+    )
+    edge_pct = rec["edge"] * 100
+
+    print(f"  [{index}] {strategy_label} — {edge_pct:.2f}% edge  (id: {rec['id']})")
+    print(f"      {rec['sport'].replace('_', ' ').title()}: {rec['event_name']}")
+    print(f"      Market: {rec['market_type'].upper()}")
+
+    for leg in rec["legs"]:
+        point_str = f" ({leg['point']:+.1f})" if leg.get("point") is not None else ""
+        odds_str = f"+{leg['odds']}" if leg["odds"] > 0 else str(leg["odds"])
+        print(f"      • {leg['bookmaker'].upper()}: {leg['outcome']}{point_str} @ {odds_str} → ${leg['stake']:.2f}")
+
+    total_stake = sum(leg["stake"] for leg in rec["legs"])
+    if rec["strategy"] == "cross_book_arb":
+        profit = total_stake * rec["edge"] / (1.0 - rec["edge"])
+        print(f"      Guaranteed profit on ${total_stake:.2f} stake: ${profit:.2f}")
+    else:
+        ev = total_stake * rec["edge"]
+        print(f"      Expected value on ${total_stake:.2f} stake: +${ev:.2f}")
+
+    if rec.get("expires_at"):
+        print(f"      Expires: {rec['expires_at']}")
+    print()
 
 
 def print_scan_header(
@@ -287,9 +317,11 @@ async def main() -> None:
     sports = args.sports or DEFAULT_SPORTS
     dry_run = not args.live
 
-    # Load budget tracker
-    tracker = BudgetTracker.load()
-    print(tracker.summary())
+    # Load trackers
+    budget = BudgetTracker.load()
+    opp_tracker = OpportunityTracker.load()
+
+    print(budget.summary())
 
     scan_count = 0
 
@@ -315,7 +347,11 @@ async def main() -> None:
                 dry_run=dry_run,
             )
 
-            # Print results
+            # Ingest into tracker — returns only NEW (not recently seen) opportunities
+            new_opps = opp_tracker.ingest(opportunities)
+            opp_tracker.save()
+
+            # Print header
             print_scan_header(
                 credits_remaining=credits_remaining,
                 credits_used=credits_used,
@@ -324,14 +360,26 @@ async def main() -> None:
                 dry_run=dry_run,
             )
 
-            if opportunities:
-                # Show top 10
+            if args.loop and opportunities:
+                # In loop mode: only show NEW opportunities (skip re-seen ones)
+                if new_opps:
+                    print(f"\n  🆕 {len(new_opps)} NEW opportunity(ies) detected:\n")
+                    for i, rec in enumerate(new_opps[:10], 1):
+                        _print_tracked_opportunity(rec, i)
+                else:
+                    print(f"\n  📋 {len(opportunities)} opportunity(ies) on radar (already tracked, no new ones)")
+            elif opportunities:
+                # One-shot mode: show everything
                 for i, opp in enumerate(opportunities[:10], 1):
                     print_opportunity(opp, i)
                 if len(opportunities) > 10:
                     print(f"\n  ... and {len(opportunities) - 10} more opportunities")
 
             print_scan_footer(opportunities, dry_run)
+
+            # In loop mode, show tracker state
+            if args.loop:
+                print(f"  📊 Tracker: {opp_tracker.summary()}")
 
         except Exception as e:
             logger.error(f"Scan failed: {e}")
