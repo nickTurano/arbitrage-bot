@@ -222,6 +222,7 @@ class OddsAPIClient:
         params: Dict[str, str] = {
             "regions": ",".join(regions),
             "markets": ",".join(markets),
+            "oddsFormat": "american",
         }
         if bookmakers:
             params["bookmakers"] = ",".join(bookmakers)
@@ -255,6 +256,7 @@ class OddsAPIClient:
             "regions": ",".join(regions),
             "markets": ",".join(markets),
             "eventIds": ",".join(event_ids),
+            "oddsFormat": "american",
         }
 
         data = await self._get(f"/sports/{sport_key}/odds", params=params)

@@ -31,7 +31,6 @@ import asyncio
 import logging
 import os
 import sys
-import time
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -193,6 +192,14 @@ async def run_scan(
             except Exception as e:
                 logger.error(f"  ✗ Error scanning {sport}: {e}")
                 continue
+
+        # Filter out events that have already commenced
+        now = datetime.now(timezone.utc)
+        upcoming = [e for e in all_events if e.commence_time > now]
+        skipped = len(all_events) - len(upcoming)
+        if skipped:
+            logger.info(f"  Filtered out {skipped} event(s) that already commenced")
+        all_events = upcoming
 
         # Run arb detection
         opportunities = engine.scan_events(all_events)

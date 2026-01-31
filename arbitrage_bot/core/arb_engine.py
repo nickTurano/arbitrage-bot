@@ -190,32 +190,79 @@ class ArbEngine:
         """
         Detect cross-book arbitrage for a specific market type.
 
-        For h2h (2 outcomes): find the best price for each outcome
-        across all bookmakers. If sum of implied probs < 1.0, arb exists.
+        Complementary outcome rules (only these pairs can be arbed):
+          h2h:     Team A vs Team B  (two team names, no point)
+          spreads: Team A -X  ↔  Team B +X  (same |X|, opposite signs)
+          totals:  Over X  ↔  Under X  (same X)
 
-        For spreads/totals: same logic but outcomes are Over/Under
-        or Team -X / Team +X. We match by outcome name + point value.
+        For each valid complementary pair, we find the best price for
+        each side across all bookmakers. If the sum of implied probs
+        is < 1.0 AND the best prices come from different books, an
+        arbitrage opportunity exists.
         """
-        # Gather all outcomes with best prices per outcome across books
-        # Key: (outcome_name, point) → (best_price, bookmaker_key)
-        best_prices: Dict[str, List[Dict[str, Any]]] = {}
+        arb_opps: List[ArbOpportunity] = []
+
+        if market_type == "h2h":
+            arb_opps.extend(self._detect_h2h_arb(event))
+        elif market_type == "spreads":
+            arb_opps.extend(self._detect_spread_arb(event))
+        elif market_type == "totals":
+            arb_opps.extend(self._detect_totals_arb(event))
+
+        return arb_opps
+
+    def _detect_h2h_arb(self, event: Event) -> List[ArbOpportunity]:
+        """
+        H2H: two outcomes are the two team names. Complementary by definition.
+        Find the best price for each team across all books.
+        """
+        # Collect all h2h prices per team across books
+        team_prices: Dict[str, List[Dict[str, Any]]] = {}
 
         for bm in event.bookmakers:
-            market = self._find_market(bm.markets, market_type)
+            market = self._find_market(bm.markets, "h2h")
             if not market:
                 continue
-
             for outcome in market.outcomes:
-                # For spreads/totals, the key includes the point value
-                # For h2h, point is None
-                key = outcome.name
-                if outcome.point is not None:
-                    key = f"{outcome.name}|{outcome.point}"
+                team_prices.setdefault(outcome.name, []).append(
+                    {
+                        "bookmaker": bm.key,
+                        "outcome": outcome.name,
+                        "odds": outcome.price,
+                        "implied_prob": american_to_implied_prob(outcome.price),
+                        "point": None,
+                    }
+                )
 
-                if key not in best_prices:
-                    best_prices[key] = []
+        if len(team_prices) != 2:
+            return []
 
-                best_prices[key].append(
+        return self._check_two_outcome_arb(event, "h2h", team_prices)
+
+    def _detect_spread_arb(self, event: Event) -> List[ArbOpportunity]:
+        """
+        Spreads: complementary pair is Team A at -X  ↔  Team B at +X.
+        (Same absolute spread value, opposite signs.)
+
+        Group all spread outcomes by absolute point value, then within
+        each group pair the negative-point outcome with the positive-point
+        outcome. Those two are the only valid arb pair.
+        """
+        # Collect all spread outcomes: keyed by (abs_point, sign)
+        # sign: "neg" for point < 0 (favorite), "pos" for point > 0 (underdog)
+        by_abs_point: Dict[float, Dict[str, List[Dict[str, Any]]]] = {}
+
+        for bm in event.bookmakers:
+            market = self._find_market(bm.markets, "spreads")
+            if not market:
+                continue
+            for outcome in market.outcomes:
+                if outcome.point is None:
+                    continue
+                abs_pt = abs(outcome.point)
+                sign = "neg" if outcome.point < 0 else "pos"
+
+                by_abs_point.setdefault(abs_pt, {}).setdefault(sign, []).append(
                     {
                         "bookmaker": bm.key,
                         "outcome": outcome.name,
@@ -225,28 +272,69 @@ class ArbEngine:
                     }
                 )
 
-        # For h2h: we need exactly 2 distinct outcomes
-        # For spreads/totals with point values: group by point, need 2 outcomes per point
         arb_opps: List[ArbOpportunity] = []
+        for abs_pt, sides in by_abs_point.items():
+            if "neg" not in sides or "pos" not in sides:
+                continue  # need both sides of the spread
 
-        if market_type == "h2h":
-            arb_opps.extend(self._check_two_outcome_arb(event, market_type, best_prices))
-        elif market_type in ("spreads", "totals"):
-            # Group by point value, then check each group
-            by_point: Dict[Optional[float], Dict[str, List[Dict[str, Any]]]] = {}
-            for key, entries in best_prices.items():
-                point = entries[0]["point"] if entries else None
-                if point not in by_point:
-                    by_point[point] = {}
-                # Re-key by outcome name only within this point group
-                outcome_name = entries[0]["outcome"]
-                by_point[point][outcome_name] = entries
+            # The complementary pair: favorite (-X) and underdog (+X)
+            pair = {
+                sides["neg"][0]["outcome"]: sides["neg"],   # e.g. "Flyers" at -1.5
+                sides["pos"][0]["outcome"]: sides["pos"],   # e.g. "Kings" at +1.5
+            }
 
-            for point, outcome_group in by_point.items():
-                if len(outcome_group) == 2:
-                    arb_opps.extend(
-                        self._check_two_outcome_arb(event, market_type, outcome_group)
-                    )
+            # Sanity: must be two different teams
+            if len(pair) != 2:
+                continue
+
+            arb_opps.extend(
+                self._check_two_outcome_arb(event, "spreads", pair)
+            )
+
+        return arb_opps
+
+    def _detect_totals_arb(self, event: Event) -> List[ArbOpportunity]:
+        """
+        Totals: complementary pair is Over X  ↔  Under X (same X).
+        Group by point value, then pair Over with Under.
+        """
+        # Collect totals outcomes keyed by (point_value, over/under)
+        by_point: Dict[float, Dict[str, List[Dict[str, Any]]]] = {}
+
+        for bm in event.bookmakers:
+            market = self._find_market(bm.markets, "totals")
+            if not market:
+                continue
+            for outcome in market.outcomes:
+                if outcome.point is None:
+                    continue
+                side = outcome.name.lower()  # "over" or "under"
+                if side not in ("over", "under"):
+                    continue
+
+                by_point.setdefault(outcome.point, {}).setdefault(side, []).append(
+                    {
+                        "bookmaker": bm.key,
+                        "outcome": outcome.name,
+                        "odds": outcome.price,
+                        "implied_prob": american_to_implied_prob(outcome.price),
+                        "point": outcome.point,
+                    }
+                )
+
+        arb_opps: List[ArbOpportunity] = []
+        for point, sides in by_point.items():
+            if "over" not in sides or "under" not in sides:
+                continue
+
+            pair = {
+                "Over": sides["over"],
+                "Under": sides["under"],
+            }
+
+            arb_opps.extend(
+                self._check_two_outcome_arb(event, "totals", pair)
+            )
 
         return arb_opps
 
@@ -371,9 +459,14 @@ class ArbEngine:
         A value bet exists when a book's implied prob for an outcome
         is significantly LOWER than consensus — meaning the book is
         offering better odds than the market average.
+
+        Grouping key: outcome_name + signed point value.
+        This ensures we only compare like-for-like:
+          - h2h:     "Cowboys" across all books
+          - spreads: "Cowboys|-1.5" vs "Cowboys|-1.5" (not vs "Cowboys|+1.5")
+          - totals:  "Over|5.5" across all books
         """
-        # Collect all implied probs per outcome across books
-        # Key: outcome_name (+ point for spreads/totals)
+        # Collect all implied probs per (outcome, signed point) across books
         outcome_probs: Dict[str, List[Dict[str, Any]]] = {}
 
         for bm in event.bookmakers:
@@ -382,14 +475,12 @@ class ArbEngine:
                 continue
 
             for outcome in market.outcomes:
+                # Key includes the signed point so spreads don't cross-contaminate
                 key = outcome.name
                 if outcome.point is not None:
                     key = f"{outcome.name}|{outcome.point}"
 
-                if key not in outcome_probs:
-                    outcome_probs[key] = []
-
-                outcome_probs[key].append(
+                outcome_probs.setdefault(key, []).append(
                     {
                         "bookmaker": bm.key,
                         "outcome": outcome.name,
@@ -402,43 +493,39 @@ class ArbEngine:
         value_bets: List[ArbOpportunity] = []
 
         for key, entries in outcome_probs.items():
-            if len(entries) < 2:
-                # Need at least 2 books for a consensus
+            if len(entries) < 3:
+                # Need at least 3 books for a meaningful consensus
                 continue
 
-            # Consensus = average implied prob
+            # Consensus = average implied prob across all books
             consensus = sum(e["implied_prob"] for e in entries) / len(entries)
 
             for entry in entries:
                 # Edge: how much better is this book vs consensus?
                 # Positive edge = book's implied prob is LOWER than consensus
-                # (meaning the book is offering better odds)
+                # (meaning the book is offering better odds for the bettor)
                 edge = consensus - entry["implied_prob"]
 
                 if edge < self.min_edge_value_bet:
                     continue
 
-                # Stake: use a fraction of max_single_bet scaled by edge confidence
-                # More edge → bigger bet, but capped
+                # Stake: scale with edge confidence, capped at max_single_bet
                 stake = min(
-                    self.max_single_bet * min(edge / 0.10, 1.0),  # scale up to 10% edge
+                    self.max_single_bet * min(edge / 0.10, 1.0),
                     self.max_single_bet,
                 )
                 stake = round(stake, 2)
-
-                outcome_name = key.split("|")[0]
-                point = entry.get("point")
 
                 expires_at = event.commence_time if event.commence_time else None
 
                 legs = [
                     ArbLeg(
                         bookmaker=entry["bookmaker"],
-                        outcome=outcome_name,
+                        outcome=entry["outcome"],
                         odds=entry["odds"],
                         implied_prob=entry["implied_prob"],
                         stake=stake,
-                        point=point,
+                        point=entry.get("point"),
                     )
                 ]
 
