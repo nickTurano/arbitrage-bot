@@ -94,7 +94,11 @@ def print_opportunity(opp: ArbOpportunity, index: int) -> None:
     )
     edge_pct = opp.edge * 100
 
-    print(f"\n[{index}] {strategy_label} — {edge_pct:.2f}% edge")
+    # Flag live (in-progress) games — these move fast
+    now = datetime.now(timezone.utc)
+    live_tag = " 🔴 LIVE" if opp.expires_at and opp.expires_at <= now else ""
+
+    print(f"\n[{index}] {strategy_label} — {edge_pct:.2f}% edge{live_tag}")
     print(f"    {opp.sport.replace('_', ' ').title()}: {opp.event_name}")
     print(f"    Market: {opp.market_type.upper()}")
 
@@ -123,7 +127,18 @@ def _print_tracked_opportunity(rec: dict, index: int) -> None:
     )
     edge_pct = rec["edge"] * 100
 
-    print(f"  [{index}] {strategy_label} — {edge_pct:.2f}% edge  (id: {rec['id']})")
+    # Flag live games
+    now = datetime.now(timezone.utc)
+    live_tag = ""
+    if rec.get("expires_at"):
+        try:
+            expires = datetime.fromisoformat(rec["expires_at"])
+            if expires <= now:
+                live_tag = " 🔴 LIVE"
+        except (ValueError, TypeError):
+            pass
+
+    print(f"  [{index}] {strategy_label} — {edge_pct:.2f}% edge{live_tag}  (id: {rec['id']})")
     print(f"      {rec['sport'].replace('_', ' ').title()}: {rec['event_name']}")
     print(f"      Market: {rec['market_type'].upper()}")
 
@@ -223,13 +238,12 @@ async def run_scan(
                 logger.error(f"  ✗ Error scanning {sport}: {e}")
                 continue
 
-        # Filter out events that have already commenced
+        # Tag in-progress vs upcoming for display (no filtering — live games
+        # are prime arb targets since books update at different speeds)
         now = datetime.now(timezone.utc)
-        upcoming = [e for e in all_events if e.commence_time > now]
-        skipped = len(all_events) - len(upcoming)
-        if skipped:
-            logger.info(f"  Filtered out {skipped} event(s) that already commenced")
-        all_events = upcoming
+        live_count = sum(1 for e in all_events if e.commence_time <= now)
+        if live_count:
+            logger.info(f"  {live_count} game(s) currently in progress (included in scan)")
 
         # Run arb detection
         opportunities = engine.scan_events(all_events)
