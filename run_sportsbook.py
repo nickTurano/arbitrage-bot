@@ -65,6 +65,27 @@ DEFAULT_SPORTS = [
 ]
 
 # ---------------------------------------------------------------------------
+# State-licensed bookmaker presets
+# ---------------------------------------------------------------------------
+# Only includes books that (a) are licensed in the state AND (b) appear on
+# TheOddsAPI. Offshore books (Bovada, MyBookie, BetOnline, LowVig, BetUS)
+# are excluded from all presets — can't legally bet there from the US.
+#
+# Sources: state gaming commission websites + TheOddsAPI bookmaker list.
+# Update these when licensing changes.
+# ---------------------------------------------------------------------------
+STATE_BOOKMAKERS = {
+    "ny": ["fanduel", "draftkings", "betmgm", "caesars"],
+    "nj": ["fanduel", "draftkings", "betmgm", "caesars", "betrivers", "unibet"],
+    "pa": ["fanduel", "draftkings", "betmgm", "caesars", "betrivers", "unibet", "barstool"],
+    "il": ["fanduel", "draftkings", "betmgm", "caesars", "betrivers", "barstool"],
+    "nv": ["fanduel", "draftkings", "betmgm", "caesars"],
+    "mi": ["fanduel", "draftkings", "betmgm", "caesars", "betrivers", "barstool"],
+    "oh": ["fanduel", "draftkings", "betmgm", "caesars", "betrivers", "barstool"],
+    "co": ["fanduel", "draftkings", "betmgm", "caesars", "betrivers", "barstool"],
+}
+
+# ---------------------------------------------------------------------------
 # Display helpers
 # ---------------------------------------------------------------------------
 
@@ -290,11 +311,18 @@ def parse_args() -> argparse.Namespace:
         help="Sports to scan (default: NFL, NBA, MLB, NHL)",
     )
     parser.add_argument(
+        "--state",
+        type=str,
+        default=None,
+        choices=list(STATE_BOOKMAKERS.keys()),
+        help="Filter to bookmakers licensed in this state (e.g. ny, nj, pa). Overrides --bookmakers.",
+    )
+    parser.add_argument(
         "--bookmakers",
         type=str,
         nargs="+",
         default=None,
-        help="Bookmakers to include (default: fanduel, draftkings, betmgm, caesars, bovada)",
+        help="Bookmakers to include (default: all US books). Ignored if --state is set.",
     )
     parser.add_argument(
         "--min-edge",
@@ -331,6 +359,14 @@ async def main() -> None:
     sports = args.sports or DEFAULT_SPORTS
     dry_run = not args.live
 
+    # Resolve bookmaker list: --state wins over --bookmakers
+    bookmakers: Optional[List[str]] = None
+    if args.state:
+        bookmakers = STATE_BOOKMAKERS[args.state]
+        logger.info(f"State filter: {args.state.upper()} → {bookmakers}")
+    elif args.bookmakers:
+        bookmakers = args.bookmakers
+
     # Load trackers
     budget = BudgetTracker.load()
     opp_tracker = OpportunityTracker.load()
@@ -355,7 +391,7 @@ async def main() -> None:
             ) = await run_scan(
                 api_key=api_key,
                 sports=sports,
-                bookmakers=args.bookmakers,
+                bookmakers=bookmakers,
                 min_edge=args.min_edge,
                 min_edge_value_bet=args.min_edge_vb,
                 dry_run=dry_run,
